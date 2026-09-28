@@ -1,6 +1,8 @@
 package com.ali.routerapp
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.graphics.Typeface
 import android.net.ConnectivityManager
@@ -37,6 +39,9 @@ class MainActivity : Activity() {
     private lateinit var passBox: EditText
     private lateinit var logView: TextView
 
+    private val loginKeys = listOf("login.cgi", "PassWord", "base64", "X_HW_Token", "GetRandCount")
+    private val respKeys = listOf("sessionid", "cookie", "rror", "lock", "ail")
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         val pad = (16 * resources.displayMetrics.density).toInt()
@@ -46,7 +51,7 @@ class MainActivity : Activity() {
         root.setPadding(pad, pad * 2, pad, pad)
 
         val title = TextView(this)
-        title.text = "Router App - Test v0.1"
+        title.text = "Router App - Test v0.2"
         title.textSize = 20f
         root.addView(title)
 
@@ -76,6 +81,14 @@ class MainActivity : Activity() {
         b2.setOnClickListener { loginTest() }
         root.addView(b2)
 
+        val b3 = Button(this)
+        b3.text = "Copy log"
+        b3.setOnClickListener {
+            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+            cm.setPrimaryClip(ClipData.newPlainText("log", logView.text))
+        }
+        root.addView(b3)
+
         logView = TextView(this)
         logView.textSize = 12f
         logView.typeface = Typeface.MONOSPACE
@@ -96,6 +109,27 @@ class MainActivity : Activity() {
     }
 
     private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
+
+    private fun absUrl(base: String, src: String): String =
+        if (src.startsWith("http")) src
+        else if (src.startsWith("/")) base + src
+        else "$base/$src"
+
+    private fun grep(tag: String, text: String, keys: List<String>, max: Int) {
+        var hits = 0
+        for (k in keys) {
+            var from = 0
+            while (hits < max) {
+                val i = text.indexOf(k, from)
+                if (i < 0) break
+                val a = maxOf(0, i - 60)
+                val b = minOf(text.length, i + 100)
+                log("  [$tag] " + text.substring(a, b).replace(Regex("\\s+"), " "))
+                hits++
+                from = i + k.length + 100
+            }
+        }
+    }
 
     // Use the Wi-Fi network directly, even if mobile data is also on
     private fun wifiNetwork(): Network? {
@@ -141,15 +175,44 @@ class MainActivity : Activity() {
                 val r = request("GET", "$base/")
                 log("HTTP ${r.code}")
                 log("Location: ${r.header("Location") ?: "-"}")
-                val t = Regex("<title>(.*?)</title>", RegexOption.IGNORE_CASE)
-                    .find(r.body)?.groupValues?.get(1)
-                log("Title: ${t ?: "-"}")
                 log("Size: ${r.body.length} bytes")
                 log("Done.")
             } catch (e: Exception) {
                 log("ERROR: ${e.javaClass.simpleName}: ${e.message}")
             }
         }
+    }
+
+    private fun afterLogin(base: String, cookieHeader: String) {
+        log("C) Page test")
+        val pages = listOf(
+            "/html/ssmp/deviceinfo/deviceinfo.asp",
+            "/html/bbsp/userdevinfo/userdevinfo.asp",
+            "/html/amp/wlanbasic/wlanbasic.asp",
+            "/html/amp/opticinfo/opticinfo.asp",
+            "/html/bbsp/waninfo/waninfo.asp"
+        )
+        for (p in pages) {
+            try {
+                val r = request("GET", base + p, null, cookieHeader)
+                val loginPage = r.body.contains("txt_Username") || r.body.contains("loginbutton")
+                log("$p -> HTTP ${r.code}, ${r.body.length} bytes" +
+                    (if (loginPage) " (session rejected)" else ""))
+            } catch (e: Exception) {
+                log("$p -> ERROR ${e.javaClass.simpleName}")
+            }
+        }
+        log("D) Device list test")
+        try {
+            val r = request(
+                "POST", "$base/html/bbsp/common/GetLanUserDevInfo.asp", "", cookieHeader
+            )
+            log("HTTP ${r.code}, ${r.body.length} bytes")
+            log("Start: " + r.body.trim().take(200).replace("\n", " "))
+        } catch (e: Exception) {
+            log("ERROR ${e.javaClass.simpleName}: ${e.message}")
+        }
+        log("Done.")
     }
 
     private fun loginTest() {
@@ -159,61 +222,53 @@ class MainActivity : Activity() {
         clearLog()
         thread {
             try {
-                log("Step 1: get token")
-                val tk = request("POST", "$base/asp/GetRandCount.asp", "")
-                val token = tk.body.trim().trimStart('\uFEFF').trim()
-                log("HTTP ${tk.code}, token length ${token.length}")
-
-                log("Step 2: login")
-                val pw64 = Base64.encodeToString(pass.toByteArray(), Base64.NO_WRAP)
-                val form = "UserName=${enc(user)}&PassWord=${enc(pw64)}" +
-                    "&Language=english&x.X_HW_Token=${enc(token)}"
-                val lr = request(
-                    "POST", "$base/login.cgi", form,
-                    "Cookie=body:Language:english:id=-1;path=/"
-                )
-                log("HTTP ${lr.code}")
-                log("Location: ${lr.header("Location") ?: "-"}")
-                val sess = lr.cookies().filter { it.contains("sessionid") }
-                if (sess.isEmpty()) {
-                    log("No session received: login failed")
-                    log("(wrong username/password, or this router uses a different login method)")
-                    log("Reply start: " + lr.body.take(150).replace("\n", " "))
-                    return@thread
-                }
-                log("Login OK (session received)")
-                val cookieHeader = sess.joinToString("; ")
-
-                log("Step 3: page test")
-                val pages = listOf(
-                    "/html/ssmp/deviceinfo/deviceinfo.asp",
-                    "/html/bbsp/userdevinfo/userdevinfo.asp",
-                    "/html/amp/wlanbasic/wlanbasic.asp",
-                    "/html/amp/opticinfo/opticinfo.asp",
-                    "/html/bbsp/waninfo/waninfo.asp"
-                )
-                for (p in pages) {
+                log("A) Login page scripts")
+                val home = request("GET", "$base/")
+                val srcs = Regex("src\\s*=\\s*[\"']([^\"']+\\.js[^\"']*)[\"']", RegexOption.IGNORE_CASE)
+                    .findAll(home.body).map { it.groupValues[1] }.toList()
+                log("Scripts on page: ${srcs.size}")
+                grep("index", home.body, loginKeys, 4)
+                for (s in srcs.take(6)) {
                     try {
-                        val r = request("GET", base + p, null, cookieHeader)
-                        val loginPage = r.body.contains("txt_Username") || r.body.contains("loginbutton")
-                        log("$p -> HTTP ${r.code}, ${r.body.length} bytes" +
-                            (if (loginPage) " (session rejected)" else ""))
+                        val r = request("GET", absUrl(base, s), null)
+                        log("Script $s: ${r.body.length} bytes")
+                        grep(s.substringAfterLast('/'), r.body, loginKeys, 4)
                     } catch (e: Exception) {
-                        log("$p -> ERROR ${e.javaClass.simpleName}")
+                        log("Script $s: ERROR")
                     }
                 }
 
-                log("Step 4: device list test")
-                try {
-                    val r = request(
-                        "POST", "$base/html/bbsp/common/GetLanUserDevInfo.asp", "", cookieHeader
+                val variants = listOf(
+                    "base64" to Base64.encodeToString(pass.toByteArray(), Base64.NO_WRAP),
+                    "plain" to pass
+                )
+                var cookieHeader: String? = null
+                for ((name, pw) in variants) {
+                    val tk = request("POST", "$base/asp/GetRandCount.asp", "")
+                    val token = tk.body.trim().trimStart('\uFEFF').trim()
+                    val form = "UserName=${enc(user)}&PassWord=${enc(pw)}" +
+                        "&Language=english&x.X_HW_Token=${enc(token)}"
+                    val lr = request(
+                        "POST", "$base/login.cgi", form,
+                        "Cookie=body:Language:english:id=-1;path=/"
                     )
-                    log("HTTP ${r.code}, ${r.body.length} bytes")
-                    log("Start: " + r.body.trim().take(200).replace("\n", " "))
-                } catch (e: Exception) {
-                    log("ERROR ${e.javaClass.simpleName}: ${e.message}")
+                    val cookies = lr.cookies()
+                    log("B) $name: HTTP ${lr.code}, ${lr.body.length} bytes")
+                    log("   cookies: " + cookies.joinToString(" | ") { it.take(22) })
+                    grep("reply", lr.body, respKeys, 5)
+                    val sess = cookies.filter { it.contains("sessionid") }
+                    if (sess.isNotEmpty()) {
+                        log("   LOGIN OK with $name")
+                        cookieHeader = sess.joinToString("; ")
+                        break
+                    }
                 }
-                log("Done.")
+                val ch = cookieHeader
+                if (ch == null) {
+                    log("Login failed in all variants")
+                    return@thread
+                }
+                afterLogin(base, ch)
             } catch (e: Exception) {
                 log("ERROR: ${e.javaClass.simpleName}: ${e.message}")
             }
