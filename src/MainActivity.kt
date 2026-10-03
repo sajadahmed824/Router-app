@@ -46,7 +46,7 @@ class MainActivity : Activity() {
         root.setPadding(pad, pad * 2, pad, pad)
 
         val title = TextView(this)
-        title.text = "Router App - Dump v0.5"
+        title.text = "Router App - Dump v0.6"
         title.textSize = 20f
         root.addView(title)
 
@@ -91,6 +91,11 @@ class MainActivity : Activity() {
         b5.text = "5) Copy device-mgmt page"
         b5.setOnClickListener { dumpAndCopy("/html/ssmp/deviceinfo/deviceinfo.asp", "GET") }
         root.addView(b5)
+
+        val b6 = Button(this)
+        b6.text = "6) Find device-manage page"
+        b6.setOnClickListener { findDevManagePage() }
+        root.addView(b6)
 
         logView = TextView(this)
         logView.textSize = 12f
@@ -181,8 +186,8 @@ class MainActivity : Activity() {
                     return@thread
                 }
                 cookieHeader = sess.joinToString("; ")
-                log("Login OK. Now press buttons 2/3/4/5 one by one.")
-                log("Each press copies full data to clipboard - paste it in chat.")
+                log("Login OK. Now press 2/3/4/5/6 one by one.")
+                log("Each dump copies full data to clipboard - paste it in chat.")
             } catch (e: Exception) {
                 log("ERROR: ${e.message}")
             }
@@ -212,6 +217,46 @@ class MainActivity : Activity() {
             } catch (e: Exception) {
                 log("ERROR: ${e.message}")
             }
+        }
+    }
+
+    private fun findDevManagePage() {
+        val base = "http://" + ipBox.text.toString().trim()
+        val ch = cookieHeader
+        if (ch == null) {
+            log("Please press 1) Login first")
+            return
+        }
+        clearLog()
+        val candidates = listOf(
+            "/html/bbsp/userdevmanage/userdevmanage.asp",
+            "/html/bbsp/lanuserinfo/lanuserinfo.asp",
+            "/html/bbsp/lanusercfg/lanusercfg.asp",
+            "/html/bbsp/hostmanage/hostmanage.asp",
+            "/html/bbsp/common/devicemanage.asp",
+            "/html/ssmp/userdevmanage/userdevmanage.asp",
+            "/html/amp/wlanmacfltr/wlanmacfltr.asp",
+            "/html/bbsp/macfilter/macfilter.asp",
+            "/html/bbsp/wlanfilter/wlanfilter.asp",
+            "/html/bbsp/accesscontrol/accesscontrol.asp"
+        )
+        thread {
+            for (p in candidates) {
+                try {
+                    val r = request("GET", base + p, null, ch, "$base/")
+                    val waiting = r.body.contains("Waiting")
+                    val notFound = r.code == 404
+                    val tag = when {
+                        notFound -> "404"
+                        waiting -> "redirect/blocked"
+                        else -> "OK candidate!"
+                    }
+                    log("$p -> HTTP ${r.code}, ${r.body.length} bytes [$tag]")
+                } catch (e: Exception) {
+                    log("$p -> ERROR")
+                }
+            }
+            log("Done. Tell me which ones say 'OK candidate!'")
         }
     }
 
