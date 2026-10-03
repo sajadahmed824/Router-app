@@ -22,9 +22,6 @@ import java.net.URLEncoder
 import kotlin.concurrent.thread
 
 class Resp(val code: Int, val headers: Map<String, List<String>>, val body: String) {
-    fun header(name: String): String? =
-        headers.entries.firstOrNull { it.key.equals(name, true) }?.value?.firstOrNull()
-
     fun cookies(): List<String> =
         headers.entries
             .filter { it.key.equals("Set-Cookie", true) }
@@ -38,9 +35,7 @@ class MainActivity : Activity() {
     private lateinit var userBox: EditText
     private lateinit var passBox: EditText
     private lateinit var logView: TextView
-
-    private val loginKeys = listOf("login.cgi", "PassWord", "base64", "X_HW_Token", "GetRandCount")
-    private val respKeys = listOf("sessionid", "sid", "cookie", "rror", "lock", "ail")
+    private var cookieHeader: String? = null
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,7 +46,7 @@ class MainActivity : Activity() {
         root.setPadding(pad, pad * 2, pad, pad)
 
         val title = TextView(this)
-        title.text = "Router App - Test v0.3"
+        title.text = "Router App - Dump v0.4"
         title.textSize = 20f
         root.addView(title)
 
@@ -63,6 +58,7 @@ class MainActivity : Activity() {
 
         userBox = EditText(this)
         userBox.hint = "Username"
+        userBox.setText("telecomadmin")
         userBox.inputType = InputType.TYPE_CLASS_TEXT
         root.addView(userBox)
 
@@ -72,22 +68,24 @@ class MainActivity : Activity() {
         root.addView(passBox)
 
         val b1 = Button(this)
-        b1.text = "1) Connection test"
-        b1.setOnClickListener { connectionTest() }
+        b1.text = "1) Login"
+        b1.setOnClickListener { doLogin() }
         root.addView(b1)
 
         val b2 = Button(this)
-        b2.text = "2) Login + page test"
-        b2.setOnClickListener { loginTest() }
+        b2.text = "2) Copy device list"
+        b2.setOnClickListener { dumpAndCopy("$ROUTER_DEVLIST", "POST") }
         root.addView(b2)
 
         val b3 = Button(this)
-        b3.text = "Copy log"
-        b3.setOnClickListener {
-            val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
-            cm.setPrimaryClip(ClipData.newPlainText("log", logView.text))
-        }
+        b3.text = "3) Copy WAN info"
+        b3.setOnClickListener { dumpAndCopy("/html/bbsp/waninfo/waninfo.asp", "GET") }
         root.addView(b3)
+
+        val b4 = Button(this)
+        b4.text = "4) Copy optical info"
+        b4.setOnClickListener { dumpAndCopy("/html/amp/opticinfo/opticinfo.asp", "GET") }
+        root.addView(b4)
 
         logView = TextView(this)
         logView.textSize = 12f
@@ -108,30 +106,13 @@ class MainActivity : Activity() {
         runOnUiThread { logView.text = "" }
     }
 
-    private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
-
-    private fun absUrl(base: String, src: String): String =
-        if (src.startsWith("http")) src
-        else if (src.startsWith("/")) base + src
-        else "$base/$src"
-
-    private fun grep(tag: String, text: String, keys: List<String>, max: Int) {
-        var hits = 0
-        for (k in keys) {
-            var from = 0
-            while (hits < max) {
-                val i = text.indexOf(k, from)
-                if (i < 0) break
-                val a = maxOf(0, i - 60)
-                val b = minOf(text.length, i + 100)
-                log("  [$tag] " + text.substring(a, b).replace(Regex("\\s+"), " "))
-                hits++
-                from = i + k.length + 100
-            }
-        }
+    private fun copyToClipboard(text: String) {
+        val cm = getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        cm.setPrimaryClip(ClipData.newPlainText("dump", text))
     }
 
-    // Use the Wi-Fi network directly, even if mobile data is also on
+    private fun enc(s: String): String = URLEncoder.encode(s, "UTF-8")
+
     private fun wifiNetwork(): Network? {
         val cm = getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
         for (n in cm.allNetworks) {
@@ -166,112 +147,59 @@ class MainActivity : Activity() {
         return Resp(code, hdrs, text)
     }
 
-    private fun connectionTest() {
-        val base = "http://" + ipBox.text.toString().trim()
-        clearLog()
-        thread {
-            try {
-                log("Testing $base ...")
-                val r = request("GET", "$base/")
-                log("HTTP ${r.code}")
-                log("Location: ${r.header("Location") ?: "-"}")
-                log("Size: ${r.body.length} bytes")
-                log("Done.")
-            } catch (e: Exception) {
-                log("ERROR: ${e.javaClass.simpleName}: ${e.message}")
-            }
-        }
-    }
-
-    private fun afterLogin(base: String, cookieHeader: String) {
-        log("C) Page test")
-        val pages = listOf(
-            "/html/ssmp/deviceinfo/deviceinfo.asp",
-            "/html/bbsp/userdevinfo/userdevinfo.asp",
-            "/html/amp/wlanbasic/wlanbasic.asp",
-            "/html/amp/opticinfo/opticinfo.asp",
-            "/html/bbsp/waninfo/waninfo.asp"
-        )
-        for (p in pages) {
-            try {
-                val r = request("GET", base + p, null, cookieHeader)
-                val loginPage = r.body.contains("txt_Username") || r.body.contains("loginbutton")
-                log("$p -> HTTP ${r.code}, ${r.body.length} bytes" +
-                    (if (loginPage) " (session rejected)" else ""))
-            } catch (e: Exception) {
-                log("$p -> ERROR ${e.javaClass.simpleName}")
-            }
-        }
-        log("D) Device list test")
-        try {
-            val r = request(
-                "POST", "$base/html/bbsp/common/GetLanUserDevInfo.asp", "", cookieHeader
-            )
-            log("HTTP ${r.code}, ${r.body.length} bytes")
-            log("Start: " + r.body.trim().take(200).replace("\n", " "))
-        } catch (e: Exception) {
-            log("ERROR ${e.javaClass.simpleName}: ${e.message}")
-        }
-        log("Done.")
-    }
-
-    private fun loginTest() {
+    private fun doLogin() {
         val base = "http://" + ipBox.text.toString().trim()
         val user = userBox.text.toString()
         val pass = passBox.text.toString()
         clearLog()
         thread {
             try {
-                log("A) Login page scripts")
-                val home = request("GET", "$base/")
-                val srcs = Regex("src\\s*=\\s*[\"']([^\"']+\\.js[^\"']*)[\"']", RegexOption.IGNORE_CASE)
-                    .findAll(home.body).map { it.groupValues[1] }.toList()
-                log("Scripts on page: ${srcs.size}")
-                grep("index", home.body, loginKeys, 4)
-                for (s in srcs.take(6)) {
-                    try {
-                        val r = request("GET", absUrl(base, s), null)
-                        log("Script $s: ${r.body.length} bytes")
-                        grep(s.substringAfterLast('/'), r.body, loginKeys, 4)
-                    } catch (e: Exception) {
-                        log("Script $s: ERROR")
-                    }
-                }
-
-                val variants = listOf(
-                    "base64" to Base64.encodeToString(pass.toByteArray(), Base64.NO_WRAP),
-                    "plain" to pass
+                val tk = request("POST", "$base/asp/GetRandCount.asp", "")
+                val token = tk.body.trim().trimStart('\uFEFF').trim()
+                val pw64 = Base64.encodeToString(pass.toByteArray(), Base64.NO_WRAP)
+                val form = "UserName=${enc(user)}&PassWord=${enc(pw64)}" +
+                    "&Language=english&x.X_HW_Token=${enc(token)}"
+                val lr = request(
+                    "POST", "$base/login.cgi", form,
+                    "Cookie=body:Language:english:id=-1;path=/"
                 )
-                var cookieHeader: String? = null
-                for ((name, pw) in variants) {
-                    val tk = request("POST", "$base/asp/GetRandCount.asp", "")
-                    val token = tk.body.trim().trimStart('\uFEFF').trim()
-                    val form = "UserName=${enc(user)}&PassWord=${enc(pw)}" +
-                        "&Language=english&x.X_HW_Token=${enc(token)}"
-                    val lr = request(
-                        "POST", "$base/login.cgi", form,
-                        "Cookie=body:Language:english:id=-1;path=/"
-                    )
-                    val cookies = lr.cookies()
-                    log("B) $name: HTTP ${lr.code}, ${lr.body.length} bytes")
-                    log("   cookies: " + cookies.joinToString(" | ") { it.take(30) })
-                    grep("reply", lr.body, respKeys, 5)
-                    val sess = cookies.filter { it.contains("sessionid") || it.contains("sid=") }
-                    if (sess.isNotEmpty()) {
-                        log("   LOGIN OK with $name")
-                        cookieHeader = sess.joinToString("; ")
-                        break
-                    }
-                }
-                val ch = cookieHeader
-                if (ch == null) {
-                    log("Login failed in all variants")
+                val sess = lr.cookies().filter { it.contains("sessionid") || it.contains("sid=") }
+                if (sess.isEmpty()) {
+                    log("Login failed")
                     return@thread
                 }
-                afterLogin(base, ch)
+                cookieHeader = sess.joinToString("; ")
+                log("Login OK. Now press buttons 2/3/4 one by one.")
+                log("Each press copies full data to clipboard - paste it in chat.")
             } catch (e: Exception) {
-                log("ERROR: ${e.javaClass.simpleName}: ${e.message}")
+                log("ERROR: ${e.message}")
             }
         }
+    }
+
+    private fun dumpAndCopy(path: String, method: String) {
+        val base = "http://" + ipBox.text.toString().trim()
+        val ch = cookieHeader
+        if (ch == null) {
+            log("Please press 1) Login first")
+            return
+        }
+        clearLog()
+        thread {
+            try {
+                val r = request(method, base + path, if (method == "POST") "" else null, ch)
+                copyToClipboard(r.body)
+                log("$path")
+                log("HTTP ${r.code}, ${r.body.length} bytes")
+                log("Copied full content to clipboard.")
+                log("Now paste it (long-press -> Paste) into the chat.")
+            } catch (e: Exception) {
+                log("ERROR: ${e.message}")
+            }
+        }
+    }
+
+    companion object {
+        const val ROUTER_DEVLIST = "/html/bbsp/common/GetLanUserDevInfo.asp"
     }
 }
