@@ -46,7 +46,7 @@ class MainActivity : Activity() {
         root.setPadding(pad, pad * 2, pad, pad)
 
         val title = TextView(this)
-        title.text = "Router App - Dump v0.4"
+        title.text = "Router App - Dump v0.5"
         title.textSize = 20f
         root.addView(title)
 
@@ -74,7 +74,7 @@ class MainActivity : Activity() {
 
         val b2 = Button(this)
         b2.text = "2) Copy device list"
-        b2.setOnClickListener { dumpAndCopy("$ROUTER_DEVLIST", "POST") }
+        b2.setOnClickListener { dumpAndCopy(ROUTER_DEVLIST, "POST") }
         root.addView(b2)
 
         val b3 = Button(this)
@@ -86,6 +86,11 @@ class MainActivity : Activity() {
         b4.text = "4) Copy optical info"
         b4.setOnClickListener { dumpAndCopy("/html/amp/opticinfo/opticinfo.asp", "GET") }
         root.addView(b4)
+
+        val b5 = Button(this)
+        b5.text = "5) Copy device-mgmt page"
+        b5.setOnClickListener { dumpAndCopy("/html/ssmp/deviceinfo/deviceinfo.asp", "GET") }
+        root.addView(b5)
 
         logView = TextView(this)
         logView.textSize = 12f
@@ -122,7 +127,13 @@ class MainActivity : Activity() {
         return null
     }
 
-    private fun request(method: String, url: String, body: String? = null, cookie: String? = null): Resp {
+    private fun request(
+        method: String,
+        url: String,
+        body: String? = null,
+        cookie: String? = null,
+        referer: String? = null
+    ): Resp {
         val net = wifiNetwork() ?: throw Exception("Wi-Fi is not connected")
         val conn = net.openConnection(URL(url)) as HttpURLConnection
         conn.requestMethod = method
@@ -131,6 +142,7 @@ class MainActivity : Activity() {
         conn.instanceFollowRedirects = false
         conn.setRequestProperty("User-Agent", "Mozilla/5.0")
         if (cookie != null) conn.setRequestProperty("Cookie", cookie)
+        if (referer != null) conn.setRequestProperty("Referer", referer)
         if (body != null) {
             conn.doOutput = true
             conn.setRequestProperty("Content-Type", "application/x-www-form-urlencoded")
@@ -169,7 +181,7 @@ class MainActivity : Activity() {
                     return@thread
                 }
                 cookieHeader = sess.joinToString("; ")
-                log("Login OK. Now press buttons 2/3/4 one by one.")
+                log("Login OK. Now press buttons 2/3/4/5 one by one.")
                 log("Each press copies full data to clipboard - paste it in chat.")
             } catch (e: Exception) {
                 log("ERROR: ${e.message}")
@@ -187,7 +199,11 @@ class MainActivity : Activity() {
         clearLog()
         thread {
             try {
-                val r = request(method, base + path, if (method == "POST") "" else null, ch)
+                val r = request(
+                    method, base + path,
+                    if (method == "POST") "" else null,
+                    ch, "$base/"
+                )
                 copyToClipboard(r.body)
                 log("$path")
                 log("HTTP ${r.code}, ${r.body.length} bytes")
