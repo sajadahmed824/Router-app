@@ -40,7 +40,7 @@ class MainActivity : Activity() {
     private lateinit var logView: TextView
 
     private val loginKeys = listOf("login.cgi", "PassWord", "base64", "X_HW_Token", "GetRandCount")
-    private val respKeys = listOf("sessionid", "cookie", "rror", "lock", "ail")
+    private val respKeys = listOf("sessionid", "sid", "cookie", "rror", "lock", "ail")
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -51,7 +51,7 @@ class MainActivity : Activity() {
         root.setPadding(pad, pad * 2, pad, pad)
 
         val title = TextView(this)
-        title.text = "Router App - Test v0.2"
+        title.text = "Router App - Test v0.3"
         title.textSize = 20f
         root.addView(title)
 
@@ -254,9 +254,9 @@ class MainActivity : Activity() {
                     )
                     val cookies = lr.cookies()
                     log("B) $name: HTTP ${lr.code}, ${lr.body.length} bytes")
-                    log("   cookies: " + cookies.joinToString(" | ") { it.take(22) })
+                    log("   cookies: " + cookies.joinToString(" | ") { it.take(30) })
                     grep("reply", lr.body, respKeys, 5)
-                    val sess = cookies.filter { it.contains("sessionid") }
+                    val sess = cookies.filter { it.contains("sessionid") || it.contains("sid=") }
                     if (sess.isNotEmpty()) {
                         log("   LOGIN OK with $name")
                         cookieHeader = sess.joinToString("; ")
